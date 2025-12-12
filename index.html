@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en" className="bg-[#FF4D00]">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Kindle Clippings Reader</title>
+    <meta name="theme-color" content="#FF4D00">
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Framer Motion -->
+    <script src="https://unpkg.com/framer-motion@10.16.4/dist/framer-motion.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body className="bg-[#FF4D00]">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+        const { motion, AnimatePresence } = window.Motion;
+
+        // --- Icons ---
+        const UploadIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" x2="12" y1="3" y2="15" /></svg>;
+        const ArrowLeftIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5" /><path d="m12 19-7-7 7-7" /></svg>;
+        const CopyIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>;
+        const DownloadIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" /></svg>;
+
+        // --- Utils ---
+
+        // Detect if text contains Chinese characters
+        const containsChinese = (text) => /[\u4e00-\u9fff]/.test(text);
+
+        const formatBookTitle = (title) => {
+            if (title === "目擊者 Trust your eyes") {
+                return (
+                    <span>
+                        目擊者 <span className="font-bitter">Trust your eyes</span>
+                    </span>
+                );
+            }
+            return title;
+        };
+
+        // Fetch book cover from Douban using a CORS proxy
+        const fetchDoubanCover = async (title, author) => {
+            try {
+                // Search Douban for the book
+                const searchUrl = `https://www.douban.com/search?cat=1001&q=${encodeURIComponent(title)}`;
+
+                // Use allorigins.win as CORS proxy to fetch the search page
+                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(searchUrl)}`;
+
+                const response = await fetch(proxyUrl);
+                if (!response.ok) return null;
+
+                const data = await response.json();
+                const html = data.contents;
+
+                // Extract cover image URL from search results
+                // Douban covers are in format: https://img9.doubanio.com/view/subject/s/public/sXXXXXXX.jpg
+                const coverMatch = html.match(/https:\/\/img\d\.doubanio\.com\/view\/subject\/[sml]\/public\/s\d+\.jpg/);
+
+                if (coverMatch) {
+                    // Convert to large size and use weserv.nl as image proxy (bypasses referer check)
+                    const coverUrl = coverMatch[0].replace('/subject/s/', '/subject/l/');
+                    return `https://images.weserv.nl/?url=${encodeURIComponent(coverUrl)}`;
+                }
+
+                return null;
+            } catch (e) {
+                console.log('Douban cover fetch failed:', e.message);
+                return null;
+            }
+        };
+
+        const fetchBookCover = async (title, author) => {
+            const cacheKey = `cover_v1_${title}_${author}`;
+
+            const manualCovers = {
+                '明暗': 'https://ideryang.oss-cn-hangzhou.aliyuncs.com/bookdemo/%E5%A4%8F%E7%9B%AE%E6%BC%B1%E7%9F%B3%20Natsume%20Soseki%EF%BC%88%E6%98%8E%E6%9A%97%EF%BC%89.jpg',
+                'Steve Jobs': 'https://ideryang.oss-cn-hangzhou.aliyuncs.com/bookdemo/Steve%20Jobs.jpg',
+                '目擊者 Trust your eyes': 'https://ideryang.oss-cn-hangzhou.aliyuncs.com/bookdemo/%E7%9B%AE%E6%93%8A%E8%80%85%20Trust%20your%20eyes.jpg'
+            };
+
+            if (Object.prototype.hasOwnProperty.call(manualCovers, title)) {
+                const url = manualCovers[title];
+                localStorage.setItem(cacheKey, url || 'null');
+                return url;
+            }
+
+            // 1. Try Local Storage Cache
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) {
+                if (cached === 'null') return null; // Cached "no cover"
+                return cached;
+            }
+
+            // Helper to save and return
+            const saveAndReturn = (url) => {
+                localStorage.setItem(cacheKey, url || 'null');
+                return url;
+            };
+
+            const isChinese = containsChinese(title) || containsChinese(author);
+
+            // For Chinese books, try Douban first (most accurate for Chinese books)
+            if (isChinese) {
+                // 1. Try Douban first for Chinese books
+                const doubanCover = await fetchDoubanCover(title, author);
+                if (doubanCover) return saveAndReturn(doubanCover);
+
+                // 2. Try Google Books as fallback
+                try {
+                    const googleUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(title)}&maxResults=3`;
+                    const googleResponse = await fetch(googleUrl);
+                    if (googleResponse.ok) {
+                        const data = await googleResponse.json();
+                        if (data.items && data.items.length > 0) {
+                            for (const item of data.items) {
+                                const imageLinks = item.volumeInfo?.imageLinks;
+                                if (imageLinks) {
+                                    const coverUrl = (imageLinks.thumbnail || imageLinks.smallThumbnail || '').replace('http://', 'https://').replace('&edge=curl', '');
+                                    if (coverUrl) return saveAndReturn(coverUrl);
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.log('Google Books (Chinese) failed:', e.message);
+                }
+            }
+
+            // For English books or fallback
+            // 1. Try Open Library (free, no CORS issues)
+            try {
+                const openLibraryUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&limit=1`;
+                const olResponse = await fetch(openLibraryUrl);
+                if (olResponse.ok) {
+                    const data = await olResponse.json();
+                    if (data.docs && data.docs.length > 0) {
+                        const coverId = data.docs[0].cover_i;
+                        if (coverId) {
+                            return saveAndReturn(`https://covers.openlibrary.org/b/id/${coverId}-L.jpg`);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log('Open Library failed:', e.message);
+            }
+
+            // 2. Try Google Books API (free, CORS-enabled)
+            try {
+                const googleUrl = `https://www.googleapis.com/books/v1/volumes?q=intitle:${encodeURIComponent(title)}+inauthor:${encodeURIComponent(author)}&maxResults=1`;
+                const googleResponse = await fetch(googleUrl);
+                if (googleResponse.ok) {
+                    const data = await googleResponse.json();
+                    if (data.items && data.items.length > 0) {
+                        const imageLinks = data.items[0].volumeInfo?.imageLinks;
+                        if (imageLinks) {
+                            const coverUrl = (imageLinks.thumbnail || imageLinks.smallThumbnail || '').replace('http://', 'https://');
+                            if (coverUrl) return saveAndReturn(coverUrl);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log('Google Books failed:', e.message);
+            }
+
+            // 3. Try title-only search as last resort
+            try {
+                const googleUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(title)}&maxResults=1`;
+                const googleResponse = await fetch(googleUrl);
+                if (googleResponse.ok) {
+                    const data = await googleResponse.json();
+                    if (data.items && data.items.length > 0) {
+                        const imageLinks = data.items[0].volumeInfo?.imageLinks;
+                        if (imageLinks) {
+                            const coverUrl = (imageLinks.thumbnail || imageLinks.smallThumbnail || '').replace('http://', 'https://');
+                            if (coverUrl) return saveAndReturn(coverUrl);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log('Google Books (title only) failed:', e.message);
+            }
+
+            return saveAndReturn(null);
+        };
+
+        const generateCoverStyle = (title) => {
+            // Elegant, muted gradients for book covers
+            const gradients = [
+                'bg-[#F2F0E9] text-gray-800', // Paper
+                'bg-[#E8E8E8] text-gray-800', // Light Gray
+                'bg-[#D3D3D3] text-gray-900', // Silver
+                'bg-[#F5F5F5] text-gray-800', // White Smoke
+            ];
+            const index = title.length % gradients.length;
+            return gradients[index];
+        };
+
+        const parseClippings = (text) => {
+            const separator = "==========";
+            const rawClippings = text.split(separator).filter(c => c.trim().length > 0);
+
+            const booksMap = {};
+
+            rawClippings.forEach(clipping => {
+                const lines = clipping.trim().split('\n');
+                if (lines.length < 2) return;
+
+                const titleLine = lines[0].trim();
+                let title = titleLine;
+                let author = "Unknown";
+
+                const authorMatch = titleLine.match(/\(([^)]+)\)$/);
+                if (authorMatch) {
+                    author = authorMatch[1];
+                    title = titleLine.replace(/\s*\([^)]+\)$/, "").trim();
+                }
+
+                // Clean up invisible chars
+                title = title.replace(/^\uFEFF/, '');
+
+                const metaLine = lines[1].trim();
+                const contentLines = lines.slice(2).join('\n').trim();
+
+                if (!contentLines) return;
+
+                if (!booksMap[title]) {
+                    booksMap[title] = {
+                        title,
+                        author,
+                        notes: []
+                    };
+                }
+
+                booksMap[title].notes.push({
+                    text: contentLines,
+                    meta: metaLine,
+                    id: Math.random().toString(36).substr(2, 9)
+                });
+            });
+
+            return Object.values(booksMap).sort((a, b) => {
+                // Prioritize "目擊者 Trust your eyes"
+                if (a.title === '目擊者 Trust your eyes') return -1;
+                if (b.title === '目擊者 Trust your eyes') return 1;
+                return a.title.localeCompare(b.title);
+            });
+        };
+
+        // --- Components ---
+
+        const Tooltip = ({ text }) => (
+            <div className="tooltip absolute bottom-full mb-2 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-gray-900 text-white text-xs rounded-lg opacity-0 transition-opacity duration-200 pointer-events-none whitespace-nowrap shadow-sm z-50">
+                {text}
+            </div>
+        );
+
+        const BookCover = ({ title, author, coverUrl, className = "" }) => {
+            const styleClass = generateCoverStyle(title);
+            const [imageError, setImageError] = useState(false);
+            const [imageLoaded, setImageLoaded] = useState(false);
+
+            const showFallback = !coverUrl || imageError;
+
+            return (
+                <div className={`relative rounded-sm ${className} select-none`}>
+                    <div className={`w-full h-full overflow-hidden rounded-sm ${showFallback ? styleClass : 'bg-gray-100'}`}>
+                        {coverUrl && !imageError && (
+                            <>
+                                <img
+                                    src={coverUrl}
+                                    alt={`${title} cover`}
+                                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
+                                    onLoad={() => setImageLoaded(true)}
+                                    onError={() => setImageError(true)}
+                                />
+                                {!imageLoaded && (
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                        <div className="w-6 h-6 border-2 border-gray-200 border-t-gray-400 rounded-full animate-spin"></div>
+                                    </div>
+                                )}
+                            </>
+                        )}
+
+                        {showFallback && (
+                            <div className="absolute inset-0 p-4 flex flex-col justify-between">
+                                <div className="text-xs font-medium text-white/80 uppercase tracking-wider">{author}</div>
+                                <div className="text-lg font-bold text-white leading-tight font-serif break-words line-clamp-4">
+                                    {formatBookTitle(title)}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const { useMotionValue, useTransform, useSpring } = window.Motion;
+
+        const Letter = ({ mouseX, char, index }) => {
+            const ref = useRef(null);
+
+            // Map mouse distance to font weight
+            // We use a transform that checks the distance of this specific letter from the mouseX motion value
+            const distance = useTransform(mouseX, (val) => {
+                const bounds = ref.current?.getBoundingClientRect() ?? { x: 0, width: 0 };
+                // Calculate distance from center of the letter
+                return val - (bounds.x + bounds.width / 2);
+            });
+
+            // Map distance to weight
+            // Ideally: 0 distance -> 900 weight, 150 distance -> 300 weight
+            // Expanded range for 400px text so the effect feels larger
+            const weightSync = useTransform(distance, [-300, 0, 300], [300, 900, 300]);
+
+            // Add a spring for "smooth slinky like feeling"
+            // Mass/stiffness can be tweaked. Mass 0.1 makes it responsive but momentum-based.
+            const weight = useSpring(weightSync, { mass: 0.1, stiffness: 150, damping: 12 });
+
+            // Also animate width slightly to accommodate the bolder text without too much layout jumping, 
+            // or let it push naturally. Variable fonts usually change width.
+            // Let's just animate weight.
+
+            return (
+                <motion.span
+                    ref={ref}
+                    style={{ fontWeight: weight }}
+                    className="inline-block"
+                >
+                    {char}
+                </motion.span>
+            );
+        };
+
+        const MagnifyTitle = () => {
+            const mouseX = useMotionValue(Infinity);
+
+            return (
+                <div
+                    className="mt-0 flex justify-start w-full cursor-default"
+                    onMouseMove={(e) => mouseX.set(e.clientX)}
+                    onMouseLeave={() => mouseX.set(Infinity)}
+                >
+                    <h1 className="text-[clamp(40px,14vw,250px)] font-['Inter'] tracking-tighter flex leading-[0.8] text-white transition-all duration-300">
+                        {Array.from("Clippings").map((char, i) => (
+                            <Letter key={i} mouseX={mouseX} char={char} index={i} />
+                        ))}
+                    </h1>
+                </div>
+            );
+        };
+
+        const LandingScreen = ({ onUpload, onDemo }) => {
+            const [isDragging, setIsDragging] = useState(false);
+            const [onlineCount, setOnlineCount] = useState(1);
+            const [activeSection, setActiveSection] = useState('home');
+
+            useEffect(() => {
+                const interval = setInterval(() => {
+                    setOnlineCount(prev => {
+                        const change = Math.floor(Math.random() * 3) - 1;
+                        return Math.max(1, prev + change);
+                    });
+                }, 5000 + Math.random() * 5000);
+                return () => clearInterval(interval);
+            }, []);
+
+            // Intersection Observer for Active Section
+            useEffect(() => {
+                const observer = new IntersectionObserver(
+                    (entries) => {
+                        entries.forEach((entry) => {
+                            if (entry.isIntersecting) {
+                                setActiveSection(entry.target.id);
+                            }
+                        });
+                    },
+                    { threshold: 0.5 }
+                );
+
+                const homeEl = document.getElementById('home');
+                const aboutEl = document.getElementById('about');
+
+                if (homeEl) observer.observe(homeEl);
+                if (aboutEl) observer.observe(aboutEl);
+
+                return () => observer.disconnect();
+            }, []);
+
+            const scrollToSection = (id) => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.scrollIntoView({ behavior: 'smooth' });
+                }
+            };
+
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                setIsDragging(true);
+            };
+
+            const handleDragLeave = (e) => {
+                e.preventDefault();
+                setIsDragging(false);
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                const file = e.dataTransfer.files[0];
+                if (file && file.name === 'My Clippings.txt') {
+                    const reader = new FileReader();
+                    reader.onload = (event) => onUpload(event.target.result);
+                    reader.readAsText(file);
+                } else if (file) {
+                    alert('Please upload a "My Clippings.txt" file.');
+                }
+            };
+
+            const handleFileSelect = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => onUpload(event.target.result);
+                    reader.readAsText(file);
+                }
+            };
+
+            return (
+                <div className="relative w-full h-screen bg-[#FF4D00] overflow-y-auto overflow-x-hidden font-sans scroll-smooth snap-y snap-mandatory scrollbar-hide overscroll-none">
+                    {/* Fixed Navigation */}
+                    <div className="fixed top-6 right-6 md:top-[60px] md:right-[60px] flex flex-col items-end gap-1 z-50 mix-blend-plus-lighter">
+                        <button
+                            onClick={() => scrollToSection('home')}
+                            className={`text-white text-base font-medium transition-opacity ${activeSection === 'home' ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}
+                        >
+                            Home
+                        </button>
+                        <button
+                            onClick={() => scrollToSection('about')}
+                            className={`text-white text-base font-medium transition-opacity ${activeSection === 'about' ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}
+                        >
+                            About
+                        </button>
+                    </div>
+
+                    {/* Section 1: Home/Upload */}
+                    <div id="home" className="relative w-full min-h-screen flex flex-col snap-start space-y-0 selection:bg-white selection:text-[#FF4D00]"
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                    >
+                        <div className="flex-1 flex flex-col px-[20px] pt-[60px] pb-6 md:p-[60px] relative z-10">
+                            <div className="flex flex-col flex-1 justify-center z-20">
+                                {/* Online Users Badge */}
+                                <div className="self-start mb-8 z-30">
+                                    <div className="bg-black rounded-full h-[40px] md:h-[44px] px-4 md:px-5 flex items-center gap-3">
+                                        <span className="w-[10px] h-[10px] md:w-[12px] md:h-[12px] rounded-full bg-[#4ADE80]"></span>
+                                        <span className="text-white text-[14px] md:text-[16px] font-medium leading-none pt-[1px]">{onlineCount} online</span>
+                                    </div>
+                                </div>
+
+
+                                {/* Title Section */}
+                                <div className="w-full flex justify-start">
+                                    <MagnifyTitle />
+                                </div>
+
+                                {/* Instructions */}
+                                <div className="mt-10 md:mt-[80px] w-full max-w-4xl text-white ml-0 mb-0 text-[18px]">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-24 font-regular leading-relaxed opacity-90">
+                                        <div>
+                                            Get your 'My Clippings.txt' from a Kindle e-reader: Connect the device to a computer with a USB cable and copy the "My Clippings.txt" file.
+                                        </div>
+                                        <div>
+                                            Get your 'My Clippings.txt' from an app: You can often find an "Export Notes" option within the Notebook view of a book to email them to yourself.
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+
+
+                            {/* Upload Area */}
+                            <div className="absolute bottom-6 right-6 md:bottom-16 md:right-16 flex flex-col items-end z-30">
+                                <div className="relative flex items-end gap-6">
+                                    <div className="flex flex-col items-end gap-1 mb-[100px] md:mb-[120px] mr-0">
+
+                                        <div className="relative flex flex-col items-end">
+                                            {/* Text Labels with Arrow */}
+                                            <div className="relative z-10 text-white font-medium text-lg md:text-xl text-right leading-tight transform -rotate-0 origin-bottom-right" style={{ fontFamily: '"Comic Sans MS", "Chalkboard SE", sans-serif' }}>
+                                                <div>Upload 'My Clippings.txt' file</div>
+                                                <button onClick={onDemo} className="hover:opacity-80 transition-all mt-1">
+                                                    Or load demo data
+                                                </button>
+                                            </div>
+
+
+                                        </div>
+
+                                    </div>
+                                    <button
+                                        onClick={() => document.getElementById('fileInput').click()}
+                                        className={`w-24 h-24 md:w-32 md:h-32 bg-white rounded-full flex items-center justify-center hover:scale-105 transition-transform duration-300 ease-out cursor-pointer group ${isDragging ? 'scale-110' : ''}`}
+                                    >
+                                        <span className="text-black font-medium text-lg md:text-lg">Upload</span>
+                                    </button>
+                                    <input id="fileInput" type="file" accept=".txt" onChange={handleFileSelect} className="hidden" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Section 2: About (Scrolls into view) */}
+                    <div id="about" className="relative w-full min-h-screen flex flex-col font-['Inter'] px-[20px] pt-[60px] pb-6 md:p-[60px] text-white selection:bg-white selection:text-[#FF4D00] snap-start">
+                        <div className="flex-1 flex flex-col justify-center max-w-4xl">
+                            <motion.h2
+                                initial={{ opacity: 0, y: 40 }}
+                                whileInView={{ opacity: 1, y: 0 }}
+                                viewport={{ once: true, margin: "-100px" }}
+                                transition={{ duration: 0.6, ease: "easeOut" }}
+                                className="text-[12vw] md:text-[80px] leading-[0.9] font-bold tracking-tighter mb-12"
+                            >
+                                DIGITAL<br />MEMORY<br />KEEPER.
+                            </motion.h2>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-12 md:gap-24 text-lg md:text-xl leading-relaxed opacity-90 font-light">
+                                <motion.p
+                                    initial={{ opacity: 0 }}
+                                    whileInView={{ opacity: 1 }}
+                                    viewport={{ once: true }}
+                                    transition={{ delay: 0.2, duration: 0.6 }}
+                                >
+                                    The thoughts you have while reading are often the ones that stay with you — your own small exchange with the author.
+                                </motion.p>
+                                <motion.p
+                                    initial={{ opacity: 0 }}
+                                    whileInView={{ opacity: 1 }}
+                                    viewport={{ once: true }}
+                                    transition={{ delay: 0.3, duration: 0.6 }}
+                                >
+                                    "Clippings" is a minimalist tool designed to liberate your highlights from your Kindle device, transforming raw text files into a beautiful, readable personal archive.
+                                </motion.p>
+                            </div>
+
+                            <motion.div
+                                initial={{ scaleX: 0 }}
+                                whileInView={{ scaleX: 1 }}
+                                viewport={{ once: true }}
+                                transition={{ delay: 0.4, duration: 0.8, ease: "circOut" }}
+                                className="w-full h-[2px] bg-white mt-16 md:mt-24 origin-left"
+                            />
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                whileInView={{ opacity: 1 }}
+                                viewport={{ once: true }}
+                                transition={{ delay: 0.6 }}
+                                className="mt-4 flex justify-between text-sm uppercase tracking-widest opacity-60"
+                            >
+                                <span>Est. 2025</span>
+                                <span>Kindle Companion</span>
+                            </motion.div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ReaderScreen = ({ books, onBack }) => {
+            const [selectedBookIndex, setSelectedBookIndex] = useState(0);
+            const [isSidebarOpen, setSidebarOpen] = useState(false);
+            const [bookCovers, setBookCovers] = useState({});
+            const selectedBook = books[selectedBookIndex];
+
+            // Fetch covers for all books on mount
+            useEffect(() => {
+                const fetchCovers = async () => {
+                    const covers = {};
+                    for (const book of books) {
+                        const coverUrl = await fetchBookCover(book.title, book.author);
+                        if (coverUrl) {
+                            covers[book.title] = coverUrl;
+                        }
+                    }
+                    setBookCovers(covers);
+                };
+                fetchCovers();
+            }, [books]);
+
+            // Scroll to top when book changes
+            const contentRef = useRef(null);
+            useEffect(() => {
+                if (contentRef.current) contentRef.current.scrollTop = 0;
+            }, [selectedBookIndex]);
+
+            const copyToClipboard = (text) => {
+                navigator.clipboard.writeText(text);
+            };
+
+            const downloadNotes = () => {
+                const element = document.createElement("a");
+                const file = new Blob([selectedBook.notes.map(n => n.text).join('\n\n')], { type: 'text/plain' });
+                element.href = URL.createObjectURL(file);
+                element.download = `${selectedBook.title}-notes.txt`;
+                document.body.appendChild(element);
+                element.click();
+            };
+
+            return (
+                <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.5 }}
+                    className="flex h-screen bg-white overflow-hidden font-sans"
+                >
+                    {/* Back Button (Fixed) */}
+                    <div className="fixed top-[40px] left-6 md:left-[40px] z-30">
+                        <button
+                            onClick={onBack}
+                            className="w-12 h-12 flex items-center justify-center bg-[#F7F7F7] hover:bg-[#EBEBEB] rounded-full text-[#222222] transition-colors group tooltip-trigger relative"
+                        >
+                            <ArrowLeftIcon />
+                            <div className="apple-tooltip tooltip-bottom">
+                                Back to upload
+                            </div>
+                        </button>
+                    </div>
+
+                    {/* Mobile Menu - Bottom Sheet */}
+                    <AnimatePresence>
+                        {isSidebarOpen && (
+                            <>
+                                <motion.div
+                                    initial={{ opacity: 0 }}
+                                    animate={{ opacity: 1 }}
+                                    exit={{ opacity: 0 }}
+                                    className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40 md:hidden"
+                                    onClick={() => setSidebarOpen(false)}
+                                />
+                                <motion.div
+                                    initial={{ y: "100%" }}
+                                    animate={{ y: 0 }}
+                                    exit={{ y: "100%" }}
+                                    transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                                    className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl max-h-[80vh] overflow-y-auto p-6 md:hidden shadow-[0_-8px_30px_rgba(0,0,0,0.12)]"
+                                >
+                                    <div className="flex justify-between items-center mb-6">
+                                        <h3 className="text-xl font-bold font-serif text-gray-900">Library</h3>
+                                        <button onClick={() => setSidebarOpen(false)} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors">
+                                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                                        </button>
+                                    </div>
+                                    <div className="space-y-3 pb-8">
+                                        {books.map((book, idx) => (
+                                            <button
+                                                key={idx}
+                                                onClick={() => { setSelectedBookIndex(idx); setSidebarOpen(false); }}
+                                                className={`w-full text-left p-4 rounded-xl transition-all duration-200 border-2 ${selectedBookIndex === idx ? 'bg-black text-white border-black shadow-lg' : 'bg-white text-gray-800 border-gray-100 hover:border-gray-200'}`}
+                                            >
+                                                <div className="font-semibold text-lg leading-tight mb-1 truncate">{formatBookTitle(book.title)}</div>
+                                                <div className={`text-sm opacity-70 truncate ${containsChinese(book.author) ? '' : 'font-sf-pro'}`}>by {book.author}</div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </motion.div>
+                            </>
+                        )}
+                    </AnimatePresence>
+
+                    {/* Sidebar - Desktop Only */}
+                    <aside className="hidden md:block md:relative md:w-[280px] md:pt-24 md:pb-6 md:ml-[10px] z-20">
+                        <div className="h-full overflow-y-auto no-scrollbar pr-8 flex items-center">
+                            <div className="w-full relative group">
+                                {/* Lines - Default State */}
+                                <div className="w-full space-y-[23px]">
+                                    {books.map((book, idx) => {
+                                        const isActive = idx === selectedBookIndex;
+                                        return (
+                                            <div key={idx} className="relative h-[2px] flex items-center">
+                                                <div
+                                                    className={`h-[2px] rounded transition-all duration-300 ease-in-out ${isActive ? 'bg-gray-900 w-[26px]' : 'bg-gray-200 w-[13px]'} group-hover:w-0`}
+                                                />
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                {/* Book Names - Hover State */}
+                                <div
+                                    className="absolute inset-0 flex items-center opacity-0 translate-x-[10px] group-hover:opacity-100 group-hover:translate-x-[20px] pointer-events-none group-hover:pointer-events-auto transition-all ease-out"
+                                    style={{ transitionDuration: '0.3s' }}
+                                >
+                                    <div className="w-full space-y-[23px]">
+                                        {books.map((book, idx) => {
+                                            const isActive = idx === selectedBookIndex;
+                                            return (
+                                                <button
+                                                    key={idx}
+                                                    onClick={() => {
+                                                        setSelectedBookIndex(idx);
+                                                        setSidebarOpen(false);
+                                                    }}
+                                                    className={`
+                                                        block w-full text-left text-sm transition-colors duration-200 h-[2px] flex items-center
+                                                        ${isActive ? 'text-[#222222]' : 'text-gray-400 hover:text-gray-600'}
+                                                    `}
+                                                    style={{ fontWeight: 400 }}
+                                                >
+                                                    <div className="max-w-[240px] truncate">
+                                                        {book.title}
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </aside>
+
+                    {/* Mobile Menu Trigger */}
+                    {!isSidebarOpen && (
+                        <button
+                            className="md:hidden fixed top-[40px] right-6 z-30 w-12 h-12 flex items-center justify-center bg-[#F7F7F7] hover:bg-[#EBEBEB] rounded-full text-[#222222] transition-colors"
+                            onClick={() => setSidebarOpen(true)}
+                        >
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="4" x2="20" y1="12" y2="12"></line>
+                                <line x1="4" x2="20" y1="6" y2="6"></line>
+                                <line x1="4" x2="20" y1="18" y2="18"></line>
+                            </svg>
+                        </button>
+                    )}
+
+
+
+                    {/* Main Content Area */}
+                    <main
+                        ref={contentRef}
+                        className="flex-1 h-full overflow-y-auto relative scroll-smooth bg-white"
+                    >
+                        <div className="max-w-7xl mx-auto px-[28px] md:px-12 lg:px-12 pt-[150px] lg:pt-[140px] pb-24 min-h-full">
+                            <AnimatePresence mode="wait">
+                                <motion.div
+                                    key={selectedBook.title}
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -10 }}
+                                    transition={{ duration: 0.4, ease: "easeOut" }}
+                                    className="flex flex-col lg:flex-row gap-12 lg:gap-24"
+                                >
+                                    {/* Desktop Cover Column */}
+                                    <div className="hidden lg:block w-[220px] flex-shrink-0 relative">
+                                        <div className="sticky top-[140px]">
+                                            <BookCover
+                                                title={selectedBook.title}
+                                                author={selectedBook.author}
+                                                coverUrl={bookCovers[selectedBook.title]}
+                                                className="w-full aspect-[2/3] book-shadow"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Mobile/Tablet Cover */}
+                                    <div className="lg:hidden flex justify-start">
+                                        <BookCover
+                                            title={selectedBook.title}
+                                            author={selectedBook.author}
+                                            coverUrl={bookCovers[selectedBook.title]}
+                                            className="w-[200px] aspect-[2/3] book-shadow"
+                                        />
+                                    </div>
+
+                                    {/* Right Column: Content */}
+                                    <div className="flex-1 max-w-2xl pt-2">
+                                        {/* Header */}
+                                        <div className="mb-16 border-b border-gray-100 pb-10">
+                                            <h1 className={`text-3xl md:text-4xl font-medium text-gray-900 mb-3 leading-tight ${containsChinese(selectedBook.title) ? 'font-serif' : 'font-bitter'}`}>
+                                                {formatBookTitle(selectedBook.title)}
+                                            </h1>
+                                            <div className={`text-lg text-gray-500 font-medium ${containsChinese(selectedBook.author) ? '' : 'font-sf-pro'}`}>
+                                                by {selectedBook.author}
+                                            </div>
+                                        </div>
+
+                                        {/* Notes */}
+                                        <div className="space-y-6">
+                                            {selectedBook.notes.map((note, idx) => (
+                                                <motion.div
+                                                    key={note.id}
+                                                    initial={{ opacity: 0, y: 20 }}
+                                                    animate={{ opacity: 1, y: 0 }}
+                                                    transition={{ duration: 0.5, delay: 0.2 + (idx * 0.05) }}
+                                                    className="group"
+                                                >
+                                                    <p className={`text-[1.1rem] leading-8 text-gray-800 whitespace-pre-wrap ${containsChinese(note.text) ? 'font-serif-content' : 'font-bitter'}`}>
+                                                        {note.text}
+                                                    </p>
+
+                                                    <div className="mt-4 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                                                        <span className="text-[10px] text-gray-300 font-mono tracking-wide uppercase">
+                                                            {note.meta.split('|')[0] || 'Unknown Location'}
+                                                        </span>
+
+                                                        <button
+                                                            onClick={() => copyToClipboard(note.text)}
+                                                            className="text-gray-300 hover:text-gray-600 transition-colors p-1"
+                                                            title="Copy"
+                                                        >
+                                                            <CopyIcon />
+                                                        </button>
+                                                    </div>
+
+                                                    {/* Spacer instead of visible line */}
+                                                    <div className="h-2"></div>
+                                                </motion.div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </motion.div>
+                            </AnimatePresence>
+                        </div>
+
+                        {/* Floating Action Buttons */}
+                        <div className="fixed bottom-6 right-6 md:bottom-10 md:right-10 flex flex-col gap-4 z-40">
+                            <button
+                                onClick={downloadNotes}
+                                className="w-12 h-12 bg-[#F7F7F7] hover:bg-[#EBEBEB] rounded-full text-[#222222] transition-all duration-300 flex items-center justify-center tooltip-trigger relative group"
+                            >
+                                <DownloadIcon />
+                                <div className="apple-tooltip tooltip-top text-left">
+                                    Keep only the content & <br /> export the book as a .txt file.
+                                </div>
+                            </button>
+                        </div>
+                    </main>
+                </motion.div>
+            );
+        };
+
+        const App = () => {
+            const [view, setView] = useState('landing'); // 'landing' or 'reader'
+            const [books, setBooks] = useState([]);
+
+            // Dynamic Text Selection Color
+            useEffect(() => {
+                const colors = [
+                    '#55FFF1', // Yellow
+                    '#FFFF55', // Pastel Pink
+                    '#55FF7A', // Baby Blue
+                    '#F8D3DC', // Orchid
+                    '#C9B5D8', // Powder Blue
+                    '#B5D2D8', // Carnation Pink
+                ];
+
+                const changeSelectionColor = () => {
+                    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+                    document.documentElement.style.setProperty('--selection-color', randomColor);
+                };
+
+                // Initial color
+                changeSelectionColor();
+
+                // Change on every click
+                document.addEventListener('mousedown', changeSelectionColor);
+                return () => document.removeEventListener('mousedown', changeSelectionColor);
+            }, []);
+
+            const handleUpload = (content) => {
+                const parsedBooks = parseClippings(content);
+                if (parsedBooks.length > 0) {
+                    setBooks(parsedBooks);
+                    setView('reader');
+                } else {
+                    alert("Could not find any clippings in that file. Please ensure it's a standard Kindle 'My Clippings.txt'.");
+                }
+            };
+
+            const loadDemo = () => {
+                const demoData = `
+Steve Jobs (Walter Isaacson)
+- Your Highlight on Location 205-210 | Added on Tuesday, June 2, 2015 8:12:12 AM
+
+I was very lucky. I had a father, named Paul, who was a pretty remarkable man. He never graduated from high school. He joined the Coast Guard in World War II and ferried troops around the world for General Patton, and I think he was always getting into trouble and getting busted down to Private. He was a machinist by trade and worked very hard and was kind of a genius with his hands. He could fix anything, and he loved doing it. He had a workbench out in the garage where, when I was about five or six, he sectioned off a little piece of it and said, "Steve, this is your workbench now." And he gave me some of his smaller tools and showed me how to use a hammer and saw and how to build things. It really was very good for me.
+==========
+Steve Jobs (Walter Isaacson)
+- Your Highlight on Location 340-350 | Added on Tuesday, June 2, 2015 8:30:15 AM
+
+When you ask creative people how they did something, they feel a little guilty because they didn't really do it, they just saw something. It seemed obvious to them after a while. That's because they were able to connect experiences they've had and synthesize new things. And the reason they were able to do that was that they've had more experiences or they have thought more about their experiences than other people. Unfortunately, that's too rare a commodity. A lot of people in our industry haven't had very diverse experiences. So they don't have enough dots to connect, and they end up with very linear solutions without a broad perspective on the problem. The broader one's understanding of the human experience, the better design we will have.
+==========
+Steve Jobs (Walter Isaacson)
+- Your Highlight on Location 512-520 | Added on Wednesday, June 3, 2015 9:15:00 AM
+
+Your time is limited, so don't waste it living someone else's life. Don't be trapped by dogma — which is living with the results of other people's thinking. Don't let the noise of others' opinions drown out your own inner voice. And most important, have the courage to follow your heart and intuition. They somehow already know what you truly want to become. Everything else is secondary.
+==========
+Steve Jobs (Walter Isaacson)
+- Your Highlight on Location 890-900 | Added on Thursday, June 4, 2015 10:45:30 AM
+
+We’re here to put a dent in the universe. Otherwise why else even be here? We're creating a completely new consciousness, like an artist or a poet. That’s how you have to think of this. We are rewriting the history of human thought with what we’re doing. It’s not just about making a profit or building a computer; it’s about changing the way people interact with information, with creativity, and with each other. It’s about building tools that amplify human ability.
+==========
+Steve Jobs (Walter Isaacson)
+- Your Highlight on Location 1245-1255 | Added on Friday, June 5, 2015 11:20:10 AM
+
+The people who are crazy enough to think they can change the world are the ones who do. It’s not the critics who count, not the man who points out how the strong man stumbles, or where the doer of deeds could have done them better. The credit belongs to the man who is actually in the arena, whose face is marred by dust and sweat and blood; who strives valiantly; who errs, who comes short again and again, because there is no effort without error and shortcoming; but who does actually strive to do the deeds; who knows great enthusiasms, the great devotions; who spends himself in a worthy cause; who at the best knows in the end the triumph of high achievement, and who at the worst, if he fails, at least fails while daring greatly.
+==========
+Steve Jobs (Walter Isaacson)
+- Your Highlight on Location 1450-1460 | Added on Saturday, June 6, 2015 02:30:45 PM
+
+Design is a funny word. Some people think design means how it looks. But of course, if you dig deeper, it's really how it works. The design of the Mac wasn't what it looked like, although that was part of it. Primarily, it was how it worked. To design something really well, you have to get it. You have to grok what it’s all about. It takes a passionate commitment to really thoroughly understand something, chew it up, not just quickly swallow it. Most people don’t take the time to do that.
+==========
+Steve Jobs (Walter Isaacson)
+- Your Highlight on Location 1670-1680 | Added on Sunday, June 7, 2015 04:15:20 PM
+
+I’m convinced that about half of what separates the successful entrepreneurs from the non-successful ones is pure perseverance. It is so hard. You put so much of your life into this thing. There are such rough moments in time that I think most people give up. I don't blame them. It's really tough and it consumes your life. If you’ve got a family and you’re in the early days of a company, I can’t imagine how one could do it. I’m sure it’s been done but it’s rough. It’s pretty much an eighteen-hour day job, seven days a week for a while. Unless you have a lot of passion about this, you’re not going to survive. You’re going to give up. So you’ve got to have an idea, or a problem or a wrong that you want to right that you’re passionate about; otherwise, you’re not going to have the perseverance to stick it through.
+==========
+Steve Jobs (Walter Isaacson)
+- Your Highlight on Location 1890-1900 | Added on Monday, June 8, 2015 09:00:00 AM
+
+Simplicity is the ultimate sophistication. It takes a lot of hard work to make something simple, to truly understand the underlying challenges and come up with elegant solutions. It’s not just about minimalism or the absence of clutter. It’s about digging through the depth of the complexity. To be truly simple, you have to go really deep. For example, to have no screws on something, you can end up having a product that is so convoluted and so complex. The better way is to go deeper with the simplicity, to understand everything about it and how it’s manufactured. You have to deeply understand the essence of a product in order to be able to get rid of the parts that are not essential.
+==========
+Steve Jobs (Walter Isaacson)
+- Your Highlight on Location 2100-2110 | Added on Tuesday, June 9, 2015 10:30:15 AM
+
+I think if you do something and it turns out pretty good, then you should go do something else wonderful, not dwell on it for too long. Just figure out what’s next. There’s a temptation to rest on your laurels, to look back and admire what you’ve built, but the world is moving forward. The moment you stop innovating, you start dying. You have to keep reinventing yourself and your work.
+==========
+Steve Jobs (Walter Isaacson)
+- Your Highlight on Location 2450-2460 | Added on Wednesday, June 10, 2015 01:45:30 PM
+
+Remembering that I'll be dead soon is the most important tool I've ever encountered to help me make the big choices in life. Because almost everything — all external expectations, all pride, all fear of embarrassment or failure — these things just fall away in the face of death, leaving only what is truly important. Remembering that you are going to die is the best way I know to avoid the trap of thinking you have something to lose. You are already naked. There is no reason not to follow your heart.
+==========
+明暗 (夏目漱石 Natsume Soseki)
+- Your Highlight on Location 50-60 | Added on Thursday, June 11, 2015 08:00:00 AM
+
+人間の心には、どうしても他人に覗かれたくない暗闇がある。それは単なる秘密という軽いものではなく、もっと根本的な、自分自身の存在に関わる深い闇だ。津田はその闇を抱えながら、日常という光の中を歩いているような気がした。光が強ければ強いほど、影もまた濃くなる。彼の心の中には、決して解消されることのない不安が渦巻いていた。それは、彼が手術を受けた後の肉体的な痛みとも共鳴し、精神的な苦痛となって彼を苛んだ。彼は、自分の人生が、自分の意志とは無関係な大きな力によって動かされているような無力感を感じざるを得なかった。
+==========
+明暗 (夏目漱石 Natsume Soseki)
+- Your Highlight on Location 120-130 | Added on Friday, June 12, 2015 09:15:30 AM
+
+金は金、愛は愛だ。それを一緒くたにしようとするから、世の中がややこしくなる。小林のような男は、その境界線を意図的に曖昧にし、人の心の隙間に入り込もうとする。津田は小林の薄汚い独りよがりな哲学に嫌悪感を抱きながらも、どこかで彼に対する奇妙な引力を感じていた。それは、自分自身が隠そうとしている醜いエゴを、小林が鏡のように映し出しているからかもしれない。人は、自分と最も似ている人間を、最も激しく憎むことがあるのだ。
+==========
+明暗 (夏目漱石 Natsume Soseki)
+- Your Highlight on Location 200-210 | Added on Saturday, June 13, 2015 10:30:00 AM
+
+お延は、夫である津田の心を完全に支配したいという欲望を持っていた。しかし、それは愛情というよりは、一種の所有欲に近いものだったかもしれない。彼女は、津田が自分以外の誰か、あるいは何かに心を奪われることを極端に恐れていた。その恐れは、彼女の献身的な態度の裏側に、鋭い棘となって潜んでいた。彼女は無意識のうちに、津田を自分の理想とする「夫」という枠組みの中に閉じ込めようとしていたのだ。愛するということは、相手の自由を奪うことなのだろうか。それとも、互いの自由を認め合うことなのだろうか。
+==========
+明暗 (夏目漱石 Natsume Soseki)
+- Your Highlight on Location 350-360 | Added on Sunday, June 14, 2015 02:45:15 PM
+
+過去を振り返るなと言うが、過去こそが現在の自分を形作っている唯一の材料だ。清子との再会は、津田にとって、封印していたはずの過去の扉を無理やりこじ開けられるような体験だった。彼女の変わらぬ美しさ、そしてどこか冷ややかな態度は、彼の中に眠っていた未練と後悔の情を呼び覚ました。彼は、自分が選んだ道が正しかったのか、それとも大きな過ちだったのか、自問せずにはいられなかった。人生の岐路において、人は何をもって幸福と不幸を判断するのだろうか。
+==========
+明暗 (夏目漱石 Natsume Soseki)
+- Your Highlight on Location 480-490 | Added on Monday, June 15, 2015 04:10:00 PM
+
+孤独は淋しいが、煩わしさがないという意味では贅沢な時間でもある。温泉宿の静寂の中で、津田は一人、自分の内面と向き合う時間を過ごした。そこには、日常の喧騒や人間関係のしがらみから解放された、独特の安らぎがあった。しかし、その安らぎは、同時に底知れぬ寂寥感を伴うものでもあった。人は結局のところ、一人で生まれ、一人で死んでいく存在なのだという冷徹な事実を、彼は改めて突きつけられたような気がした。
+==========
+明暗 (夏目漱石 Natsume Soseki)
+- Your Highlight on Location 600-610 | Added on Tuesday, June 16, 2015 08:20:30 AM
+
+運命という言葉は、諦めるための便利な言い訳に過ぎない。しかし、抗っても抗いきれない大きな流れの中に身を置いたとき、人はそれを運命と呼びたくなるのだ。津田の人生は、彼自身の選択の積み重ねであると同時に、周囲の人々の思惑や、偶然という名の必然によって織りなされた複雑な模様のようだった。彼はその模様の中で、もがき苦しみながらも、必死に自分の生きる意味を探し求めていた。
+==========
+明暗 (夏目漱石 Natsume Soseki)
+- Your Highlight on Location 720-730 | Added on Wednesday, June 17, 2015 09:45:00 AM
+
+人は誰でも仮面を被っている。その仮面の下にある素顔を見せる相手こそが、本当の友人だと言うが、果たして素顔をすべてさらけ出すことができる人間など存在するのだろうか。誰しも、自分自身でさえ直視したくないような醜い欲望や、卑小な感情を隠し持っているものだ。社会生活を営む上で、仮面は必要不可欠な防具であり、それを脱ぎ捨てることは、無防備な状態で戦場に立つに等しい行為なのかもしれない。
+==========
+明暗 (夏目漱石 Natsume Soseki)
+- Your Highlight on Location 850-860 | Added on Thursday, June 18, 2015 11:00:15 AM
+
+幸福は遠くにあるものではなく、日常の些細な隙間に隠れている。例えば、湯上がりの一杯の茶、窓から差し込む柔らかな陽光、あるいは読みかけの本のページをめくる指先の感触。そうした何気ない瞬間にこそ、人生の真実が宿っているのかもしれない。しかし、津田のような男にとって、そうしたささやかな幸福に気づくことは容易ではなかった。彼の目は常に、まだ手に入れていない何か、あるいは失ってしまった何かへと向けられていたからだ。
+==========
+明暗 (夏目漱石 Natsume Soseki)
+- Your Highlight on Location 980-990 | Added on Friday, June 19, 2015 01:30:45 PM
+
+言葉は刃物だ。使い方を誤れば、自分も他人も傷つける。お延との会話の中で、津田はしばしば言葉の暴力性を痛感した。何気ない一言が、相手の心の柔らかい部分を突き刺し、修復不可能な傷を残すことがある。沈黙は金と言うが、言葉を交わさなければ伝わらない思いもある。コミュニケーションという行為は、常に誤解と衝突のリスクを孕んだ、薄氷の上を歩くような危うい営みなのだ。
+==========
+明暗 (夏目漱石 Natsume Soseki)
+- Your Highlight on Location 1100-1110 | Added on Saturday, June 20, 2015 03:50:00 PM
+
+明と暗、光と影。その境界線にこそ、人生の機微がある。完全な善人もいなければ、完全な悪人もいない。誰もが胸の中に、天使と悪魔を同居させているのだ。津田の中にも、清廉潔白でありたいという願いと、欲望のままに生きたいという衝動がせめぎ合っていた。その葛藤こそが、人間存在の証であり、生きているという実感そのものなのかもしれない。物語は唐突に終わるが、彼らの人生は、書かれざるページの外側で、永遠に続いていく。
+==========
+目擊者 Trust your eyes (Lin Baz)
+- Your Highlight on Page 15 | Added on Sunday, June 21, 2015 08:10:00 AM
+
+What you see is not always what is there; it is what your brain expects to see. The brain fills in the gaps, stitching together fragments of light and shadow to create a cohesive image of reality. But what if that stitching is flawed? What if the brain, in its desperate attempt to make sense of the chaos, creates a monster where there is only a shadow, or a friend where there is a foe? Thomas Kilbride stood by his window, looking out at the world he thought he knew, unaware that his perception was about to shatter like a dropped mirror.
+==========
+目擊者 Trust your eyes (Lin Baz)
+- Your Highlight on Page 42 | Added on Monday, June 22, 2015 09:25:30 AM
+
+The camera lens is objective, but the photographer is not. Every frame is a choice of exclusion. When you look at a photograph, you are seeing what someone wanted you to see, and more importantly, you are not seeing what they chose to leave out. The truth often lies in the periphery, in the blurry edges where the focus fades. In the digital age, where images can be manipulated with a few clicks, the old adage "seeing is believing" has become a dangerous trap. Trusting your eyes might be the biggest mistake of your life.
+==========
+目擊者 Trust your eyes (Lin Baz)
+- Your Highlight on Page 88 | Added on Tuesday, June 23, 2015 10:40:15 AM
+
+Memory is a traitor. It rewrites the script every time you replay the scene. You think you remember exactly what happened that night—the color of the car, the sound of the footsteps, the look on her face. But each time you access that memory, you alter it slightly. You add details that weren't there, you smooth over inconsistencies, you conform the narrative to fit your current emotional state. Eventually, the memory becomes a fiction, a story you tell yourself to survive, bearing little resemblance to the raw, unvarnished truth.
+==========
+目擊者 Trust your eyes (Lin Baz)
+- Your Highlight on Page 120 | Added on Wednesday, June 24, 2015 01:15:00 PM
+
+Trust your eyes, they say. But eyes can be tricked by light, by shadow, by perspective. A straight stick looks bent in water. A mirage looks like an oasis in the desert. And a killer can look like a saint if the lighting is just right. Ray Kilbride knew that his brother Thomas saw things differently than most people. To Thomas, the world was a map of interconnected data points, a puzzle to be solved. But Ray saw the messiness of human emotion, the gray areas where logic failed and instinct took over.
+==========
+目擊者 Trust your eyes (Lin Baz)
+- Your Highlight on Page 165 | Added on Thursday, June 25, 2015 02:30:45 PM
+
+The truth is often hiding in the periphery, in the blur at the edge of the photograph. You focus on the smiling faces in the center, missing the ominous figure lurking in the background. It takes a different kind of vision—a willingness to look away from the obvious—to spot the danger before it's too late. Whir360 was supposed to map the world, to bring every corner of the globe into clear view. But instead, it had captured a crime, a frozen moment of horror that was now buried in a sea of data, waiting for someone with the patience to find it.
+==========
+目擊者 Trust your eyes (Lin Baz)
+- Your Highlight on Page 210 | Added on Friday, June 26, 2015 03:45:10 PM
+
+Witnessing is a burden. Once you see it, you carry the weight of that knowledge forever. You can't unsee a murder. You can't scrub the image from your retina. It burns itself into your neural pathways, playing on a loop every time you close your eyes. Thomas wanted to be a hero, to be the one who solved the puzzle. But he didn't understand the cost. Being a witness doesn't just mean seeing something happen; it means becoming part of the story, a target for those who want the truth to remain buried.
+==========
+目擊者 Trust your eyes (Lin Baz)
+- Your Highlight on Page 255 | Added on Saturday, June 27, 2015 05:00:20 PM
+
+We categorize people instantly: safer, dangerous, useful, irrelevant. It's a survival mechanism, not a judgment. Within milliseconds of meeting someone, your brain has already assessed their threat level, their social status, their mating potential. We like to think we are rational beings, guided by logic and reason, but we are still animals at our core, reacting to subtle cues of body language and pheromones. This instinct is what kept our ancestors alive on the savannah, but in the modern concrete jungle, it can lead to fatal errors in judgment.
+==========
+目擊者 Trust your eyes (Lin Baz)
+- Your Highlight on Page 300 | Added on Sunday, June 28, 2015 08:30:00 AM
+
+In a world of deepfakes and digital manipulation, reality has become a scarce commodity. We live in an era where video evidence can be fabricated, where voices can be synthesized, where the very fabric of truth is being pulled apart thread by thread. How can you trust your eyes when the things you see on your screen might not even exist? The only thing left to trust is your gut, that primal instinct that screams when something isn't right, even if your logical mind can't explain why.
+==========
+目擊者 Trust your eyes (Lin Baz)
+- Your Highlight on Page 345 | Added on Monday, June 29, 2015 09:45:15 AM
+
+Look closer. The details don't lie, even if the big picture is a fabrication. The devil is in the details, they say. A shadow falling in the wrong direction. A reflection that doesn't match the object. A pixel out of place. These are the cracks in the illusion, the tiny flaws that reveal the lie. Thomas was a master of details. He lived his life in the minutiae, cataloging facts and figures while the rest of the world swept past him. And it was this obsession with the small things that would ultimately be his salvation—or his undoing.
+==========
+目擊者 Trust your eyes (Lin Baz)
+- Your Highlight on Page 390 | Added on Tuesday, June 30, 2015 11:20:00 AM
+
+Vision is the art of seeing things invisible. It's about looking past the surface, penetrating the veil of deception to find the core truth hidden beneath. True vision requires not just healthy eyes, but an open mind—a willingness to accept that the world is stranger and more dangerous than we can possibly imagine. As the net closed in around them, Ray and Thomas realized that they were fighting not just a killer, but a system designed to keep people blind, compliant, and unaware of the monsters walking among them.
+==========
+`;
+                handleUpload(demoData);
+            };
+
+            return (
+                <AnimatePresence mode="popLayout">
+                    {view === 'landing' && <LandingScreen key="landing" onUpload={handleUpload} onDemo={loadDemo} />}
+                    {view === 'reader' && <ReaderScreen key="reader" books={books} onBack={() => setView('landing')} />}
+                </AnimatePresence>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>
