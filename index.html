@@ -99,6 +99,122 @@
             }
         };
 
+        // Fetch book cover from NeoDB using a CORS proxy
+        const fetchNeoDB = async (title, author) => {
+            try {
+                // Search NeoDB for the book
+                // Using 'query' parameter as discovered in research
+                const searchUrl = `https://neodb.social/api/catalog/search?query=${encodeURIComponent(title)}&category=book`;
+
+                // Use allorigins.win as CORS proxy
+                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(searchUrl)}`;
+
+                const response = await fetch(proxyUrl);
+                if (!response.ok) return null;
+
+                const data = await response.json();
+                const contents = JSON.parse(data.contents); // allorigins returns stringified JSON in 'contents'
+
+                if (!contents.data || contents.data.length === 0) return null;
+
+                // Find the best match
+                // 1. Filter by category='book' (API should do this but verification is good)
+                const books = contents.data.filter(item => item.category === 'book');
+
+                if (books.length === 0) return null;
+
+                // 2. Try to find a match with the author if available
+                let bestMatch = books[0];
+
+                if (author && author !== "Unknown") {
+                    // Normalize author string for comparison
+                    const normalizedTargetAuthor = author.toLowerCase().replace(/[.,\s]/g, '');
+
+                    const authorMatch = books.find(book => {
+                        // NeoDB authors are often in 'author' array or 'origin_author'
+                        // Based on the observed response, checking available fields
+                        // The response example didn't strictly show an author field in the root of items always, 
+                        // but 'author' array was visible in the detailed response. 
+                        // We'll rely on the search relevance primarily but prioritize if we see author match.
+                        // Ideally we'd need detailed item info but search result might be enough.
+                        // Let's stick to the first result for now as search relevance is usually good,
+                        // unless we can loosely match title better.
+                        const bookTitle = (book.title || '').toLowerCase().replace(/[.,\s]/g, '');
+                        const targetTitle = title.toLowerCase().replace(/[.,\s]/g, '');
+                        return bookTitle.includes(targetTitle) || targetTitle.includes(bookTitle);
+                    });
+
+                    if (authorMatch) bestMatch = authorMatch;
+                }
+
+                if (bestMatch && bestMatch.cover_image_url) {
+                    return bestMatch.cover_image_url;
+                }
+
+                return null;
+            } catch (e) {
+                console.log('NeoDB cover fetch failed:', e.message);
+                return null;
+            }
+        };
+
+        // Fetch book cover from Open Library
+        const fetchOpenLibrary = async (title, author) => {
+            try {
+                const openLibraryUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&limit=1`;
+                const response = await fetch(openLibraryUrl);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.docs && data.docs.length > 0) {
+                        const coverId = data.docs[0].cover_i;
+                        if (coverId) {
+                            return `https://covers.openlibrary.org/b/id/${coverId}-L.jpg`;
+                        }
+                    }
+                }
+                return null;
+            } catch (e) {
+                console.log('Open Library failed:', e.message);
+                return null;
+            }
+        };
+
+        // Fetch book cover from Google Books
+        const fetchGoogleBooks = async (title, author) => {
+            try {
+                // Try searching with both title and author first
+                const googleUrl = `https://www.googleapis.com/books/v1/volumes?q=intitle:${encodeURIComponent(title)}+inauthor:${encodeURIComponent(author)}&maxResults=1`;
+                const response = await fetch(googleUrl);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.items && data.items.length > 0) {
+                        const imageLinks = data.items[0].volumeInfo?.imageLinks;
+                        if (imageLinks) {
+                            return (imageLinks.thumbnail || imageLinks.smallThumbnail || '').replace('http://', 'https://');
+                        }
+                    }
+                }
+
+                // Fallback: search by title only
+                const fallbackUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(title)}&maxResults=1`;
+                const fallbackResponse = await fetch(fallbackUrl);
+                if (fallbackResponse.ok) {
+                    const data = await fallbackResponse.json();
+                    if (data.items && data.items.length > 0) {
+                        const imageLinks = data.items[0].volumeInfo?.imageLinks;
+                        if (imageLinks) {
+                            return (imageLinks.thumbnail || imageLinks.smallThumbnail || '').replace('http://', 'https://');
+                        }
+                    }
+                }
+
+                return null;
+            } catch (e) {
+                console.log('Google Books failed:', e.message);
+                return null;
+            }
+        };
+
         const fetchBookCover = async (title, author) => {
             const cacheKey = `cover_v1_${title}_${author}`;
 
@@ -129,85 +245,32 @@
 
             const isChinese = containsChinese(title) || containsChinese(author);
 
-            // For Chinese books, try Douban first (most accurate for Chinese books)
+            // Strategy for Chinese Books
+            // Priority: NeoDB -> Open Library -> Douban (Cached) -> No Cover
             if (isChinese) {
-                // 1. Try Douban first for Chinese books
+                // 1. Try NeoDB
+                const neodbCover = await fetchNeoDB(title, author);
+                if (neodbCover) return saveAndReturn(neodbCover);
+
+                // 2. Try Open Library
+                const olCover = await fetchOpenLibrary(title, author);
+                if (olCover) return saveAndReturn(olCover);
+
+                // 3. Try Douban
                 const doubanCover = await fetchDoubanCover(title, author);
                 if (doubanCover) return saveAndReturn(doubanCover);
-
-                // 2. Try Google Books as fallback
-                try {
-                    const googleUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(title)}&maxResults=3`;
-                    const googleResponse = await fetch(googleUrl);
-                    if (googleResponse.ok) {
-                        const data = await googleResponse.json();
-                        if (data.items && data.items.length > 0) {
-                            for (const item of data.items) {
-                                const imageLinks = item.volumeInfo?.imageLinks;
-                                if (imageLinks) {
-                                    const coverUrl = (imageLinks.thumbnail || imageLinks.smallThumbnail || '').replace('http://', 'https://').replace('&edge=curl', '');
-                                    if (coverUrl) return saveAndReturn(coverUrl);
-                                }
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.log('Google Books (Chinese) failed:', e.message);
-                }
             }
 
-            // For English books or fallback
-            // 1. Try Open Library (free, no CORS issues)
-            try {
-                const openLibraryUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&limit=1`;
-                const olResponse = await fetch(openLibraryUrl);
-                if (olResponse.ok) {
-                    const data = await olResponse.json();
-                    if (data.docs && data.docs.length > 0) {
-                        const coverId = data.docs[0].cover_i;
-                        if (coverId) {
-                            return saveAndReturn(`https://covers.openlibrary.org/b/id/${coverId}-L.jpg`);
-                        }
-                    }
-                }
-            } catch (e) {
-                console.log('Open Library failed:', e.message);
-            }
+            // Strategy for Non-Chinese Books
+            // Priority: Open Library -> Google Books -> No Cover
+            if (!isChinese) {
+                // 1. Try Open Library
+                const olCover = await fetchOpenLibrary(title, author);
+                if (olCover) return saveAndReturn(olCover);
 
-            // 2. Try Google Books API (free, CORS-enabled)
-            try {
-                const googleUrl = `https://www.googleapis.com/books/v1/volumes?q=intitle:${encodeURIComponent(title)}+inauthor:${encodeURIComponent(author)}&maxResults=1`;
-                const googleResponse = await fetch(googleUrl);
-                if (googleResponse.ok) {
-                    const data = await googleResponse.json();
-                    if (data.items && data.items.length > 0) {
-                        const imageLinks = data.items[0].volumeInfo?.imageLinks;
-                        if (imageLinks) {
-                            const coverUrl = (imageLinks.thumbnail || imageLinks.smallThumbnail || '').replace('http://', 'https://');
-                            if (coverUrl) return saveAndReturn(coverUrl);
-                        }
-                    }
-                }
-            } catch (e) {
-                console.log('Google Books failed:', e.message);
-            }
-
-            // 3. Try title-only search as last resort
-            try {
-                const googleUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(title)}&maxResults=1`;
-                const googleResponse = await fetch(googleUrl);
-                if (googleResponse.ok) {
-                    const data = await googleResponse.json();
-                    if (data.items && data.items.length > 0) {
-                        const imageLinks = data.items[0].volumeInfo?.imageLinks;
-                        if (imageLinks) {
-                            const coverUrl = (imageLinks.thumbnail || imageLinks.smallThumbnail || '').replace('http://', 'https://');
-                            if (coverUrl) return saveAndReturn(coverUrl);
-                        }
-                    }
-                }
-            } catch (e) {
-                console.log('Google Books (title only) failed:', e.message);
+                // 2. Try Google Books
+                const googleCover = await fetchGoogleBooks(title, author);
+                if (googleCover) return saveAndReturn(googleCover);
             }
 
             return saveAndReturn(null);
