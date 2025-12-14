@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="en" className="bg-[#FF4D00]">
+<html lang="en" className="bg-white">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Kindle Clippings Reader</title>
-    <meta name="theme-color" content="#FF4D00">
+    <meta name="theme-color" content="#FFFFFF">
 
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -26,7 +26,7 @@
     <link rel="stylesheet" href="style.css">
 </head>
 
-<body className="bg-[#FF4D00]">
+<body className="bg-white">
     <div id="root"></div>
 
     <script type="text/babel">
@@ -370,7 +370,7 @@
                     onMouseMove={(e) => mouseX.set(e.clientX)}
                     onMouseLeave={() => mouseX.set(Infinity)}
                 >
-                    <h1 className="text-[clamp(40px,14vw,250px)] font-['Inter'] tracking-tighter flex leading-[0.8] text-white transition-all duration-300">
+                    <h1 className="text-[clamp(40px,14vw,250px)] font-['Inter'] tracking-tighter flex leading-[0.8] text-black transition-all duration-300">
                         {Array.from("Clippings").map((char, i) => (
                             <Letter key={i} mouseX={mouseX} char={char} index={i} />
                         ))}
@@ -456,25 +456,25 @@
             };
 
             return (
-                <div className="relative w-full h-screen bg-[#FF4D00] overflow-y-auto overflow-x-hidden font-sans scroll-smooth snap-y snap-mandatory scrollbar-hide overscroll-none">
+                <div className="relative w-full h-screen bg-white overflow-y-auto overflow-x-hidden font-sans scroll-smooth snap-y snap-mandatory scrollbar-hide overscroll-none">
                     {/* Fixed Navigation */}
-                    <div className="fixed top-6 right-6 md:top-[60px] md:right-[60px] flex flex-col items-end gap-1 z-50 mix-blend-plus-lighter">
+                    <div className="fixed top-6 right-6 md:top-[60px] md:right-[60px] flex flex-col items-end gap-1 z-50">
                         <button
                             onClick={() => scrollToSection('home')}
-                            className={`text-white text-base font-medium transition-opacity ${activeSection === 'home' ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}
+                            className={`text-black text-base font-medium transition-opacity ${activeSection === 'home' ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}
                         >
                             Home
                         </button>
                         <button
                             onClick={() => scrollToSection('about')}
-                            className={`text-white text-base font-medium transition-opacity ${activeSection === 'about' ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}
+                            className={`text-black text-base font-medium transition-opacity ${activeSection === 'about' ? 'opacity-100' : 'opacity-30 hover:opacity-80'}`}
                         >
                             About
                         </button>
                     </div>
 
                     {/* Section 1: Home/Upload */}
-                    <div id="home" className="relative w-full min-h-screen flex flex-col snap-start space-y-0 selection:bg-white selection:text-[#FF4D00]"
+                    <div id="home" className="relative w-full min-h-screen flex flex-col snap-start space-y-0 selection:bg-black selection:text-white"
                         onDragOver={handleDragOver}
                         onDragLeave={handleDragLeave}
                         onDrop={handleDrop}
@@ -496,7 +496,7 @@
                                 </div>
 
                                 {/* Instructions */}
-                                <div className="mt-10 md:mt-[80px] w-full max-w-4xl text-white ml-0 mb-0 text-[18px]">
+                                <div className="mt-10 md:mt-[80px] w-full max-w-4xl text-black ml-0 mb-0 text-[18px] font-bitter">
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-24 font-regular leading-relaxed opacity-90">
                                         <div>
                                             Get your 'My Clippings.txt' from a Kindle e-reader: Connect the device to a computer with a USB cable and copy the "My Clippings.txt" file.
@@ -517,9 +517,9 @@
 
                                         <div className="relative flex flex-col items-end">
                                             {/* Text Labels with Arrow */}
-                                            <div className="relative z-10 text-white font-medium text-lg md:text-xl text-right leading-tight transform -rotate-0 origin-bottom-right" style={{ fontFamily: '"Comic Sans MS", "Chalkboard SE", sans-serif' }}>
+                                            <div className="relative z-10 text-black font-medium text-lg md:text-xl text-right leading-tight transform -rotate-0 origin-bottom-right font-bitter">
                                                 <div>Upload 'My Clippings.txt' file</div>
-                                                <button onClick={onDemo} className="hover:opacity-80 transition-all mt-1">
+                                                <button onClick={onDemo} className="hover:opacity-50 transition-opacity duration-300 mt-1">
                                                     Or load demo data
                                                 </button>
                                             </div>
@@ -530,9 +530,9 @@
                                     </div>
                                     <button
                                         onClick={() => document.getElementById('fileInput').click()}
-                                        className={`w-24 h-24 md:w-32 md:h-32 bg-white rounded-full flex items-center justify-center hover:scale-105 transition-transform duration-300 ease-out cursor-pointer group ${isDragging ? 'scale-110' : ''}`}
+                                        className={`w-24 h-24 md:w-32 md:h-32 bg-black rounded-full flex items-center justify-center hover:scale-105 transition-transform duration-300 ease-out cursor-pointer group ${isDragging ? 'scale-110' : ''}`}
                                     >
-                                        <span className="text-black font-medium text-lg md:text-lg">Upload</span>
+                                        <span className="text-white font-medium text-lg md:text-lg">Upload</span>
                                     </button>
                                     <input id="fileInput" type="file" accept=".txt" onChange={handleFileSelect} className="hidden" />
                                 </div>
@@ -541,7 +541,7 @@
                     </div>
 
                     {/* Section 2: About (Scrolls into view) */}
-                    <div id="about" className="relative w-full min-h-screen flex flex-col font-['Inter'] px-[20px] pt-[60px] pb-6 md:p-[60px] text-white selection:bg-white selection:text-[#FF4D00] snap-start">
+                    <div id="about" className="relative w-full min-h-screen flex flex-col font-['Inter'] px-[20px] pt-[60px] pb-6 md:p-[60px] text-black selection:bg-black selection:text-white snap-start">
                         <div className="flex-1 flex flex-col justify-center max-w-4xl">
                             <motion.h2
                                 initial={{ opacity: 0, y: 40 }}
@@ -553,7 +553,7 @@
                                 DIGITAL<br />MEMORY<br />KEEPER.
                             </motion.h2>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-12 md:gap-24 text-lg md:text-xl leading-relaxed opacity-90 font-light">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-12 md:gap-24 text-lg md:text-xl leading-relaxed opacity-90 font-regular font-bitter">
                                 <motion.p
                                     initial={{ opacity: 0 }}
                                     whileInView={{ opacity: 1 }}
@@ -577,7 +577,7 @@
                                 whileInView={{ scaleX: 1 }}
                                 viewport={{ once: true }}
                                 transition={{ delay: 0.4, duration: 0.8, ease: "circOut" }}
-                                className="w-full h-[2px] bg-white mt-16 md:mt-24 origin-left"
+                                className="w-full h-[2px] bg-black mt-16 md:mt-24 origin-left"
                             />
                             <motion.div
                                 initial={{ opacity: 0 }}
@@ -899,7 +899,7 @@
             // Dynamic Background Color based on View
             useEffect(() => {
                 if (view === 'landing') {
-                    updateThemeColor('#FF4D00');
+                    updateThemeColor('#FFFFFF');
                 } else {
                     updateThemeColor('#FFFFFF');
                 }
