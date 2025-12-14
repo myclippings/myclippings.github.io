@@ -340,7 +340,7 @@
             // Map distance to weight
             // Ideally: 0 distance -> 900 weight, 150 distance -> 300 weight
             // Expanded range for 400px text so the effect feels larger
-            const weightSync = useTransform(distance, [-300, 0, 300], [300, 900, 300]);
+            const weightSync = useTransform(distance, [-300, 0, 300], [400, 900, 400]);
 
             // Add a spring for "smooth slinky like feeling"
             // Mass/stiffness can be tweaked. Mass 0.1 makes it responsive but momentum-based.
